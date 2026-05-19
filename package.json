@@ -1,0 +1,12 @@
+{
+  "name": "woocommerce-optimisation-devrika",
+  "version": "1.0.0",
+  "description": "puria.ro SEO + UX automation via Playwright",
+  "main": "fix_category_rules_v2.js",
+  "scripts": {
+    "start": "node fix_category_rules_v2.js"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}
