@@ -77,173 +77,62 @@ async def save_css_snippet(page, title, code):
     }""", [code, title])
 
 
-async def main():
-    async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            SESSION_DIR,
-            headless=False,
-            args=['--disable-blink-features=AutomationControlled', '--start-maximized'],
-            user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            viewport={'width': 1280, 'height': 900}
-        )
-        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        page = context.pages[0] if context.pages else await context.new_page()
-
-        await ensure_logged_in(page)
-
-        # 1. Deactivate old conflicting image snippets (cover vs contain conflict)
-        await page.goto('https://puria.ro/wp-admin/', wait_until='networkidle')
-        for sid in [248076, 248077, 248078, 248075]:
-            result = await page.evaluate("""async (id) => {
-                const nonce = window.wpApiSettings?.nonce || '';
-                const res = await fetch(`/wp-json/wp/v2/wpcode_snippet/${id}`, {
-                    method: 'POST',
-                    headers: {'X-WP-Nonce': nonce, 'Content-Type': 'application/json'},
-                    body: JSON.stringify({status: 'inactive'})
-                });
-                return {id, status: res.status};
-            }""", sid)
-            print(f'Deactivate snippet {sid}: {result}')
-
-        # 2. Nuclear CSS: contain wins with highest specificity
-        CONTAIN_CSS = """/* Puria — images contain, nuclear specificity */
-html body .etheme-product-grid-item .etheme-product-grid-image {
-    aspect-ratio: 1/1 !important;
-    height: auto !important;
-    overflow: hidden !important;
-    background: #fff !important;
-    display: block !important;
-}
-html body .etheme-product-grid-item .etheme-product-grid-image > a {
-    display: block !important;
-    width: 100% !important;
-    height: 100% !important;
-}
-html body .etheme-product-grid-item .etheme-product-grid-image img,
-html body .etheme-product-grid-item .etheme-product-grid-image a img {
-    object-fit: contain !important;
-    object-position: center center !important;
-    width: 100% !important;
-    height: 100% !important;
-    padding: 6px !important;
-    box-sizing: border-box !important;
-    transition: transform .3s ease !important;
-}
-html body .etheme-product-grid-item:hover .etheme-product-grid-image img {
-    transform: scale(1.04) !important;
-}"""
-
-        r = await save_css_snippet(page, 'Puria — Images contain (nuclear)', CONTAIN_CSS)
-        print(f'Contain CSS snippet: {r}')
-
-        # Clear SiteGround cache via admin-ajax with correct action
-        await page.goto('https://puria.ro/wp-admin/', wait_until='networkidle')
-        sg_flush = await page.evaluate("""async () => {
-            const nonce = window.wpApiSettings?.nonce || '';
-            const fd = new FormData();
-            fd.append('action', 'siteground_optimizer_purge_cache');
-            fd.append('security', nonce);
-            const res = await fetch('/wp-admin/admin-ajax.php', {method: 'POST', body: fd});
-            const text = await res.text();
-            return {status: res.status, text: text.substring(0, 60)};
-        }""")
-        print(f'SG cache flush: {sg_flush}')
-
-        # JS nuclear: force contain via inline style (beats ANY CSS including theme inline)
-        JS_CONTAIN_TITLE = 'Puria — Force contain on all product images (JS)'
-        JS_CONTAIN_CODE = """// Puria: force contain on product images + MutationObserver for slider reinit
-(function() {
-    var SELECTOR = [
-        '.etheme-product-grid-image img',
-        'li.product img.attachment-woocommerce_thumbnail',
-        'li.product img.attachment-shop_catalog',
-        '.product-image img',
-        '.woocommerce-loop-product__link img'
-    ].join(',');
-
-    function fixImg(img) {
-        if (img._puriaFixed) return;
-        img.style.setProperty('object-fit', 'contain', 'important');
-        img.style.setProperty('object-position', 'center center', 'important');
-        img.style.setProperty('width', '100%', 'important');
-        img.style.setProperty('height', '100%', 'important');
-        img.style.setProperty('padding', '6px', 'important');
-        img.style.setProperty('box-sizing', 'border-box', 'important');
-        img.style.setProperty('max-width', '100%', 'important');
-        img.style.setProperty('max-height', '100%', 'important');
-
-        var wrap = img.closest('.etheme-product-grid-image, .product-image-wrap, [class*="product-image"]');
-        if (wrap) {
-            wrap.style.setProperty('background', '#ffffff', 'important');
-            wrap.style.setProperty('overflow', 'hidden', 'important');
-            wrap.style.setProperty('display', 'flex', 'important');
-            wrap.style.setProperty('align-items', 'center', 'important');
-            wrap.style.setProperty('justify-content', 'center', 'important');
-        }
-        img._puriaFixed = true;
-    }
-
-    function forceContain() {
-        document.querySelectorAll(SELECTOR).forEach(fixImg);
-    }
-
-    // MutationObserver: catches Swiper/slider DOM changes
-    var obs = new MutationObserver(function(mutations) {
-        mutations.forEach(function(m) {
-            m.addedNodes.forEach(function(node) {
-                if (node.nodeType !== 1) return;
-                if (node.matches && node.matches('img')) fixImg(node);
-                node.querySelectorAll && node.querySelectorAll('img').forEach(fixImg);
-            });
-            // Also re-check attributeChange on img (style reset)
-            if (m.type === 'attributes' && m.target.tagName === 'IMG') {
-                m.target._puriaFixed = false;
-                fixImg(m.target);
-            }
-        });
-    });
-    obs.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['style']});
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', forceContain);
-    } else {
-        forceContain();
-    }
-    setTimeout(forceContain, 500);
-    setTimeout(forceContain, 1500);
-    setTimeout(forceContain, 3000);
-})();"""
-
-        await page.goto(
-            'https://puria.ro/wp-admin/admin.php?page=wpcode-snippet-manager&custom=1',
-            wait_until='networkidle'
-        )
+async def deactivate_snippet(page, snippet_id):
+    url = f'https://puria.ro/wp-admin/admin.php?page=wpcode-snippet-manager&snippet_id={snippet_id}'
+    try:
+        await page.goto(url, wait_until='domcontentloaded', timeout=25000)
         await page.wait_for_timeout(600)
-        await page.evaluate("""() => {
-            for (const h of document.querySelectorAll('h3')) {
-                if (h.textContent.includes('JavaScript') || h.textContent.includes('JS')) { h.click(); return; }
-            }
-        }""")
-        await page.wait_for_timeout(800)
-        ti2 = await page.query_selector('input[name="wpcode_snippet_title"]')
-        if ti2:
-            await ti2.fill(JS_CONTAIN_TITLE)
-        await page.evaluate("""(c) => {
-            const cm = document.querySelector('.CodeMirror');
-            if (cm?.CodeMirror) { cm.CodeMirror.setValue(c); return; }
-            const ta = document.querySelector('textarea[name="wpcode_snippet_code"]');
-            if (ta) { ta.value = c; ta.dispatchEvent(new Event('input', {bubbles:true})); }
-        }""", JS_CONTAIN_CODE)
-        await page.evaluate("""() => {
-            const cb = document.querySelector('input[name="wpcode_active"]');
-            if (cb && !cb.checked) cb.click();
-        }""")
-        js_r = await page.evaluate("""async ([code, title]) => {
-            const nonce = document.querySelector('#wpcode-save-snippet-nonce')?.value || '';
+        result = await page.evaluate("""async () => {
+            const nonce = document.querySelector('#wpcode-save-snippet-nonce')?.value;
+            if (!nonce) return {error: 'no nonce - session expired?', url: window.location.href};
             const httpRef = document.querySelector('input[name="_wp_http_referer"]')?.value || '';
+            const title = document.querySelector('input[name="wpcode_snippet_title"]')?.value || '';
+            const cm = document.querySelector('.CodeMirror');
+            const code = cm?.CodeMirror ? cm.CodeMirror.getValue() :
+                (document.querySelector('textarea[name="wpcode_snippet_code"]')?.value || '');
+            let snipType = 'css';
+            for (const inp of document.querySelectorAll('input[name="wpcode_snippet_type"]')) {
+                if (inp.checked) { snipType = inp.value; break; }
+            }
             const fd = new FormData();
             fd.append('wpcode_snippet_title', title);
-            fd.append('wpcode_snippet_type', 'js');
+            fd.append('wpcode_snippet_type', snipType);
+            fd.append('wpcode_snippet_code', code);
+            fd.append('wpcode_auto_insert', '0');
+            fd.append('wpcode_auto_insert_location', 'site_wide_footer');
+            fd.append('wpcode-save-snippet-nonce', nonce);
+            fd.append('_wp_http_referer', httpRef);
+            fd.append('button', 'publish');
+            const res = await fetch(window.location.href, {method: 'POST', body: fd});
+            return {status: res.status, url: res.url.substring(0, 80)};
+        }""")
+        print(f'[{snippet_id}] deactivated: {result}')
+        return result
+    except Exception as e:
+        print(f'[{snippet_id}] ERROR: {e}')
+        return None
+
+
+async def activate_snippet(page, snippet_id):
+    url = f'https://puria.ro/wp-admin/admin.php?page=wpcode-snippet-manager&snippet_id={snippet_id}'
+    try:
+        await page.goto(url, wait_until='domcontentloaded', timeout=25000)
+        await page.wait_for_timeout(600)
+        result = await page.evaluate("""async () => {
+            const nonce = document.querySelector('#wpcode-save-snippet-nonce')?.value;
+            if (!nonce) return {error: 'no nonce', url: window.location.href};
+            const httpRef = document.querySelector('input[name="_wp_http_referer"]')?.value || '';
+            const title = document.querySelector('input[name="wpcode_snippet_title"]')?.value || '';
+            const cm = document.querySelector('.CodeMirror');
+            const code = cm?.CodeMirror ? cm.CodeMirror.getValue() :
+                (document.querySelector('textarea[name="wpcode_snippet_code"]')?.value || '');
+            let snipType = 'css';
+            for (const inp of document.querySelectorAll('input[name="wpcode_snippet_type"]')) {
+                if (inp.checked) { snipType = inp.value; break; }
+            }
+            const fd = new FormData();
+            fd.append('wpcode_snippet_title', title);
+            fd.append('wpcode_snippet_type', snipType);
             fd.append('wpcode_snippet_code', code);
             fd.append('wpcode_active', '1');
             fd.append('wpcode_auto_insert', '1');
@@ -252,57 +141,74 @@ html body .etheme-product-grid-item:hover .etheme-product-grid-image img {
             fd.append('_wp_http_referer', httpRef);
             fd.append('button', 'publish');
             const res = await fetch(window.location.href, {method: 'POST', body: fd});
-            const m = res.url.match(/snippet_id=(\d+)/);
-            return {status: res.status, id: m ? m[1] : null};
-        }""", [JS_CONTAIN_CODE, JS_CONTAIN_TITLE])
-        print(f'JS contain snippet: {js_r}')
+            return {status: res.status, url: res.url.substring(0, 80)};
+        }""")
+        print(f'[{snippet_id}] activated: {result}')
+        return result
+    except Exception as e:
+        print(f'[{snippet_id}] ERROR: {e}')
+        return None
 
-        # Flush SiteGround cache via UI
-        print('\nFlushing SiteGround cache via UI...')
-        await page.goto('https://puria.ro/wp-admin/admin.php?page=sg-cachepress', wait_until='domcontentloaded')
-        await page.wait_for_timeout(2000)
-        # Try clicking any purge/flush button
-        flushed = await page.evaluate("""async () => {
-            const btns = Array.from(document.querySelectorAll('button, a, input[type=button], input[type=submit]'));
-            const purge = btns.find(b => /purge|flush|clear|cache/i.test(b.textContent || b.value || ''));
-            if (purge) { purge.click(); return purge.textContent || purge.value; }
-            return null;
-        }""")
-        print(f'Purge button clicked: {flushed}')
-        await page.wait_for_timeout(3000)
-        # Also try the SG Optimizer URL directly
-        await page.goto('https://puria.ro/wp-admin/admin.php?page=sg-cachepress&tab=supercacher', wait_until='domcontentloaded')
-        await page.wait_for_timeout(1500)
-        flushed2 = await page.evaluate("""async () => {
-            const btns = Array.from(document.querySelectorAll('button, a, input[type=button], input[type=submit]'));
-            const purge = btns.find(b => /purge|flush|clear/i.test(b.textContent || b.value || ''));
-            if (purge) { purge.click(); return purge.textContent || purge.value; }
-            // Try all buttons text
-            return btns.slice(0,8).map(b => b.textContent.trim().substring(0,30)).join(' | ');
-        }""")
-        print(f'Supercacher tab: {flushed2}')
-        await page.wait_for_timeout(2000)
 
-        # Verify images on /caini/
-        print('\nVerifying /caini/ images...')
-        await page.goto('https://puria.ro/caini/', wait_until='domcontentloaded')
-        await page.wait_for_timeout(4000)
-        check = await page.evaluate("""() => {
-            const imgs = Array.from(document.querySelectorAll(
-                '.etheme-product-grid-item .etheme-product-grid-image img'
-            )).slice(0, 5);
-            return imgs.map(i => ({
-                fit: getComputedStyle(i).objectFit,
-                inlineFit: i.style.objectFit,
-                dw: Math.round(i.getBoundingClientRect().width),
-                dh: Math.round(i.getBoundingClientRect().height),
-                puriaFixed: i._puriaFixed || false
-            }));
+async def main():
+    import glob as _glob, os as _os
+    for f in _glob.glob(f'{SESSION_DIR}/Singleton*'):
+        try: _os.remove(f)
+        except: pass
+
+    async with async_playwright() as p:
+        context = await p.chromium.launch_persistent_context(
+            SESSION_DIR,
+            headless=False,
+            args=['--disable-blink-features=AutomationControlled'],
+            user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            viewport={'width': 1280, 'height': 900}
+        )
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        page = context.pages[0] if context.pages else await context.new_page()
+
+        await ensure_logged_in(page)
+
+        # SiteGround cache flush
+        print('Flushing SiteGround cache...')
+
+        # Extract SG-specific nonce from admin page scripts
+        await page.goto('https://puria.ro/wp-admin/', wait_until='domcontentloaded', timeout=20000)
+        await page.wait_for_timeout(1000)
+        sg_data = await page.evaluate("""() => {
+            // SG Optimizer injects window variable with nonce
+            if (window.SiteGroundOptimizer) return JSON.stringify(window.SiteGroundOptimizer);
+            if (window.sg_optimizer) return JSON.stringify(window.sg_optimizer);
+            if (window.sgCachePress) return JSON.stringify(window.sgCachePress);
+            // Scan inline scripts for nonce
+            for (const s of document.querySelectorAll('script:not([src])')) {
+                const t = s.textContent;
+                if (t.includes('SiteGroundOptimizer') || t.includes('sg_cachepress') || t.includes('sg_optimizer')) {
+                    return t.substring(0, 500);
+                }
+            }
+            return 'not found';
         }""")
-        print('\n--- Images on /caini/ ---')
-        for idx, img in enumerate(check):
-            status = 'OK' if img['fit'] == 'contain' else 'FAIL'
-            print(f'  [{idx}] {status} fit={img["fit"]} inline={img["inlineFit"]} {img["dw"]}x{img["dh"]}px fixed={img["puriaFixed"]}')
+        print(f'SG vars: {sg_data[:300]}')
+
+        # Try with SG nonce extracted, or use admin bar link
+        flush_result = await page.evaluate("""async () => {
+            // Method: click WP toolbar cache flush link
+            const toolbarLinks = Array.from(document.querySelectorAll('#wpadminbar a, #wpadminbar button'));
+            const cacheLink = toolbarLinks.find(el => /cache|purge|flush/i.test(el.textContent + (el.href||'')));
+            if (cacheLink) {
+                if (cacheLink.href && cacheLink.href.includes('flush')) {
+                    const r = await fetch(cacheLink.href);
+                    return {method: 'toolbar_link', status: r.status, url: cacheLink.href.substring(0,80)};
+                }
+                cacheLink.click();
+                return {method: 'toolbar_click', text: cacheLink.textContent.trim()};
+            }
+            // Dump toolbar links for debugging
+            return {method: 'none', toolbar: toolbarLinks.slice(0,15).map(l => l.textContent.trim().substring(0,20) + '|' + (l.href||'').substring(30,60))};
+        }""")
+        import json
+        print(f'Flush attempt: {json.dumps(flush_result)}')
 
         await context.close()
 
