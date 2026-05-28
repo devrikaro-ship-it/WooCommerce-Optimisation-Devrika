@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 .env
 /tmp/
+
+# Date clienti — raman local, nu se publica pe GitHub
+clients/
