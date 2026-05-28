@@ -158,6 +158,46 @@ await page.waitForURL('**/wp-admin/**');
 
 ## Template — adauga greseala noua
 
+## GRESEALA #11 — WPCode UI arata doar 20 snippeturi, nu toate active
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** WPCode afisa 20 snippeturi per pagina in admin. Am presupus ca sunt toate. In realitate erau 56 active. Parametrul `per_page=100` din URL e ignorat de WPCode.
+
+**Efect negativ:** Audit incomplet — 36 snippeturi invizibile, inclusiv ONE-SHOT-uri periculoase active.
+
+**Regula:** Auditul WPCode se face via PHP snippet cu query direct pe `wp_posts`:
+```php
+$rows = $wpdb->get_results("SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type='wpcode' AND post_status='publish' ORDER BY ID ASC");
+```
+Niciodata nu te baza pe UI pentru a cunoaste numarul real de snippeturi active.
+
+---
+
+## GRESEALA #12 — Script Playwright restartat pentru fiecare pas = browser nou la fiecare rulare
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** La fiecare pas nou (verifica, fix, verifica din nou), am modificat scriptul si l-am restartat. Fiecare restart = browser nou, chiar daca `launchPersistentContext` refoloseste profilul.
+
+**Efect negativ:** 10+ ferestre Chrome deschise succesiv, utilizatorul frustrat, context pierdut intre pasi.
+
+**Regula:** Scrie TOTI pasii in `main()` INAINTE de prima rulare. Ruleaza o singura data. `context.close()` doar la finalul absolut. Nu modifica si nu restarta scriptul intre pasi.
+
+---
+
+## GRESEALA #13 — CSS cover activ simultan cu CSS contain = conflict silentios
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** Snippeturi CSS vechi cu `object-fit: cover !important` (248076, 248078) au ramas active dupa adaugarea snippeturilor cu `contain`. Ambele rulau simultan.
+
+**Efect negativ:** Comportament impredictibil — unele imagini cover, altele contain, depindea de ordinea de incarcare CSS.
+
+**Regula:** La orice modificare `object-fit`, cauta si dezactiveaza TOATE snippeturile cu `cover` sau `contain` pe imagini inainte de a adauga unul nou. Un singur snippet activ per proprietate CSS.
+
+---
+
 ```
 ## GRESEALA #N — [Titlu scurt descriptiv]
 

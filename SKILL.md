@@ -247,6 +247,9 @@ Verifica aceste reguli inainte de orice implementare. Sursa: `MISTAKES.md`.
 | Dezactiveaza ONE-SHOT imediat dupa rulare | Sitemap regenerat la fiecare request |
 | Dezactiveaza snippetul vechi inainte de a crea versiunea noua | Duplicate ruleaza in paralel |
 | `launchPersistentContext` nu `newContext` | Login la fiecare rulare |
+| **Audit WPCode via PHP query, nu UI** | UI arata 20/pagina — poti rata 30+ snippeturi active |
+| **Verifica `cover` vs `contain` inainte de fix imagini** | Conflict silentios — comportament impredictibil |
+| **Scrie TOTI pasii in main() inainte de rulare** | Fiecare restart script = browser nou = sesiune noua |
 
 ---
 

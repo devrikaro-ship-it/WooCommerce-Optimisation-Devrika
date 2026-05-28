@@ -239,11 +239,51 @@ Verificarile din wp-admin vad mereu versiunea live (utilizator logat = bypass ca
 
 ---
 
-## #13 — Audit lunar snippeturi WPCode
+## #13 — Audit snippeturi WPCode — metoda corecta
 
-Ruleaza o data pe luna:
-1. Lista toate snippeturi active
+**REGULA CRITICA:** WPCode UI afisa maxim 20 snippeturi per pagina. `per_page=100` din URL e ignorat. Nu te baza pe UI pentru numarul real.
+
+**Metoda corecta — PHP snippet one-shot:**
+```php
+global $wpdb;
+$rows = $wpdb->get_results(
+  "SELECT ID, post_title FROM {$wpdb->posts} 
+   WHERE post_type='wpcode' AND post_status='publish' 
+   ORDER BY ID ASC"
+);
+$out = array_map(fn($r) => ['id'=>$r->ID, 'name'=>$r->post_title], $rows);
+file_put_contents(WP_CONTENT_DIR.'/wpcode-audit.json', json_encode($out));
+```
+
+**Audit lunar:**
+1. Ruleaza query-ul de mai sus
 2. Dezactiveaza orice cu `ONE-SHOT:` sau `DEBUG:` in titlu
-3. Identifica duplicate (titluri similare sau cod identic)
-4. Pastreaza maxim 15 snippeturi active (ideal sub 10)
-5. Documenteaza orice schimbare in `clients/[client]/DOCUMENTATION.md`
+3. Identifica duplicate (titluri identice sau cod identic)
+4. Identifica conflicte (`cover` vs `contain` simultan)
+5. Consolideaza grupuri per functionalitate (footer, sort, contain etc.)
+6. Pastreaza maxim 15 active (ideal sub 10)
+7. Documenteaza in `clients/[client]/DOCUMENTATION.md`
+
+---
+
+## #14 — Script Playwright: o singura sesiune lunga
+
+**Regula:** Scrie TOTI pasii in `main()` INAINTE de prima rulare. Ruleaza o singura data. Nu modifica si nu restarta scriptul intre pasi — fiecare restart = browser nou.
+
+```javascript
+async function main() {
+  const context = await chromium.launchPersistentContext(SESSION_DIR, { headless: false });
+  const page = context.pages()[0] || await context.newPage();
+  await ensureLoggedIn(page);
+
+  // Pas 1
+  // Pas 2
+  // Pas 3
+  // ... toti pasii aici, in secventa
+
+  await context.close(); // DOAR la final absolut
+}
+```
+
+**Gresit:** kill script → adauga pas → restart → browser nou → kill → adauga pas → restart...
+**Corect:** planifica toti pasii → scrie tot → ruleaza o data → done.
