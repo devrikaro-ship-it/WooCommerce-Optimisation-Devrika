@@ -198,6 +198,110 @@ Niciodata nu te baza pe UI pentru a cunoaste numarul real de snippeturi active.
 
 ---
 
+## GRESEALA #14 — PHP snippet cu `echo '<style>'` in loc de CSS-type
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** Snippeturi de footer (248053–248058, apoi 248265/267/268) au fost create ca PHP-type cu `add_action('wp_head', function() { echo '<style>...</style>'; })`. Dezactivate pentru ca faceau site-ul lent.
+
+**Efect negativ:** Dezactivarea a lasat footrul fara niciun CSS activ. Site broken. Debugging 2h ca sa gasim cauza.
+
+**Regula:** Orice snippet care face DOAR styling → tip **CSS** nativ in WPCode, nu PHP cu echo.
+
+| Caz | Tip corect |
+|-----|-----------|
+| Culori, layout, fonturi | **CSS** |
+| Interactiuni DOM | **JS** |
+| WC hooks, filters, body_class | **PHP** |
+| PHP care face doar `echo '<style>'` | **Gresit → converteste la CSS** |
+
+---
+
+## GRESEALA #15 — Acelasi WC hook filtrat de 3 snippeturi diferite simultan
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** `woocommerce_related_products` filter inregistrat de 3 snippeturi (248059, 248063, 248064). Fiecare lua output-ul precedentului si il filtra din nou.
+
+**Efect negativ:** Pe fiecare pagina produs: get_terms + get_ancestors + get_term (nested) + get_terms + wp_get_post_terms × N + get_posts × 3 runde = 20-30 DB queries doar pentru related products.
+
+**Regula:** Max 1 filter activ per hook WooCommerce. Consolida logica in acelasi filter. Verifica ce filtre exista pe hook inainte sa adaugi unul nou.
+
+---
+
+## GRESEALA #16 — `ob_start` + regex pe tot HTML-ul paginii
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** Schema Product fix (248032) folosea `ob_start()` cu callback pe `template_redirect` → bufferiza intregul HTML generat, rula `preg_replace_callback` + `json_decode` + `json_encode` pe output complet.
+
+**Efect negativ:** Cel mai lent snippet din tot site-ul. Rula pe fiecare request de pagina produs, chiar si cu cache activ (la prima incarcate/cache miss).
+
+**Regula:** Nu folosi `ob_start` pentru a modifica schema/JSON-LD. Foloseste hook-ul direct:
+- Rank Math: `add_filter('rank_math/json_ld', function($data) {...}, 99, 2)`
+- Yoast: `add_filter('wpseo_schema_graph', ...)`
+- WooCommerce: `add_filter('woocommerce_structured_data_product', ...)`
+
+---
+
+## GRESEALA #17 — `wp_get_post_terms()` in bucla per produs
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** Filtrul related products facea `wp_get_post_terms($rid, 'product_cat')` pentru FIECARE produs related ca sa verifice daca e din aceeasi specie. Cu 4 produse related = 4 query-uri suplimentare.
+
+**Efect negativ:** O(n) queries unde n = numarul de produse related. Scala prost.
+
+**Regula:** Inlocuieste cu `get_objects_in_term($cat_ids, 'product_cat')` care returneaza TOTI post ID din N categorii intr-un singur query SQL, apoi `array_intersect()` in PHP:
+
+```php
+$all_in_species = get_objects_in_term($valid_cats, 'product_cat'); // 1 query
+$filtered = array_intersect($related_posts, $all_in_species);      // PHP, 0 queries
+```
+
+---
+
+## GRESEALA #18 — DB queries in wp_head fara cache
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** ItemList Schema (248048) facea `get_posts()` + 10× `wc_get_product()` in `wp_head` pe fiecare pagina categorie. Total: 11 DB queries per request.
+
+**Efect negativ:** Fiecare cache miss pe o pagina categorie = 11 queries suplimentare. Cu 20 categorii si trafic moderat = sute de queries evitabile.
+
+**Regula:** Orice `get_posts()` / `wc_get_product()` / `get_terms()` in wp_head pe pagini publice → wraps obligatoriu in transient:
+
+```php
+$cache_key = 'puria_itemlist_' . $term->term_id;
+$schema = get_transient($cache_key);
+if ($schema === false) {
+    // ... queries grele ...
+    set_transient($cache_key, $schema, HOUR_IN_SECONDS);
+}
+echo $schema;
+```
+
+`wp_cache_get/set` = request-level (se pierde). `get_transient/set_transient` = persistent intre requests.
+
+---
+
+## GRESEALA #19 — Dezactivat snippet PHP fara replacement CSS gata
+
+**Proiect:** puria.ro | **Data:** Mai 2026
+
+**Ce s-a intamplat:** Snippeturi PHP footer dezactivate pentru performanta (248265/267/268) fara a crea mai intai CSS-type replacement. Vechile snippeturi PHP (248053-248058) erau deja in trash.
+
+**Efect negativ:** Footer fara niciun CSS activ. Culori disparute, layout broken, trust badges disparute. Client afectat.
+
+**Regula:** Ordinea corecta la inlocuire snippet:
+1. Creezi noul snippet (CSS-type sau versiunea imbunatatita)
+2. Verifici ca functioneaza pe staging/preview sau cu cache bypass
+3. **Abia apoi** dezactivezi/stergi cel vechi
+
+Niciodata dezactivezi mai intai, creezi dupa.
+
+---
+
 ```
 ## GRESEALA #N — [Titlu scurt descriptiv]
 

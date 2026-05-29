@@ -287,3 +287,108 @@ async function main() {
 
 **Gresit:** kill script → adauga pas → restart → browser nou → kill → adauga pas → restart...
 **Corect:** planifica toti pasii → scrie tot → ruleaza o data → done.
+
+
+---
+
+## #15 — WPCode: tip corect per caz de utilizare
+
+Nu folosi PHP-type pentru stiluri. Foloseste tipul nativ WPCode:
+
+| Ce vrei sa faci | Tip snippet |
+|-----------------|-------------|
+| Culori, layout, fonturi, spacing | **CSS** |
+| Dropdown, carousel, DOM interactions | **JS** |
+| WC hooks/filters, body_class, schema conditionala | **PHP** |
+| PHP care face doar `echo '<style>...</style>'` | ❌ Gresit — converteste la CSS |
+| PHP care face doar `echo '<script>...</script>'` | ❌ Gresit — converteste la JS |
+
+**Ordinea corecta la inlocuire snippet:**
+1. Creezi noul snippet
+2. Verifici ca merge
+3. Abia apoi dezactivezi/stergi cel vechi
+
+---
+
+## #16 — PHP hooks WooCommerce: guard obligatoriu + cache
+
+Orice hook PHP care face DB queries trebuie sa aiba:
+
+**1. Guard de pagina** (nu rula pe tot site-ul):
+```php
+add_action('wp_head', function() {
+    if (!is_product_category()) return; // fara asta ruleaza pe TOATE paginile
+    // ...
+});
+```
+
+**2. Cache pentru queries grele:**
+```php
+// Transient = persistent intre requests (pentru schema, related products)
+$cache_key = 'prefix_' . $term->term_id;
+$data = get_transient($cache_key);
+if ($data === false) {
+    $data = get_posts([...]); // query greu
+    set_transient($cache_key, $data, HOUR_IN_SECONDS);
+}
+
+// wp_cache = request-level doar (pentru deduplicare in acelasi request)
+$cached = wp_cache_get($key, 'grup');
+if ($cached === false) {
+    $cached = /* calcul */;
+    wp_cache_set($key, $cached, 'grup', 3600);
+}
+```
+
+---
+
+## #17 — Related products: 1 filter, get_objects_in_term
+
+Nu pune multiple filtre pe `woocommerce_related_products`. Un singur filter, optimizat:
+
+```php
+// GRESIT: wp_get_post_terms() per produs = N queries
+foreach ($related_posts as $rid) {
+    $terms = wp_get_post_terms($rid, 'product_cat', ['fields' => 'ids']); // 1 query per produs!
+}
+
+// CORECT: get_objects_in_term = 1 query pentru toti
+$all_in_cats = get_objects_in_term($valid_cat_ids, 'product_cat'); // 1 query
+$filtered = array_intersect($related_posts, $all_in_cats);          // PHP, 0 queries
+```
+
+---
+
+## #18 — Schema/JSON-LD: hook direct, nu ob_start
+
+**Gresit (lent):**
+```php
+add_action('template_redirect', function() {
+    ob_start(function($html) {
+        return preg_replace_callback('|<script.*?ld\+json.*?>(.*?)</script>|s', function($m) {
+            // modifica $m[1] ...
+        }, $html);
+    });
+});
+```
+Bufferizeaza tot HTML-ul, ruleaza regex pe output complet.
+
+**Corect (rapid):**
+```php
+// Rank Math
+add_filter('rank_math/json_ld', function($data, $jsonld) {
+    if (!is_product()) return $data;
+    foreach ($data as &$item) {
+        if (($item['@type'] ?? '') === 'Product') {
+            // modifica direct $item['offers'] etc.
+        }
+    }
+    return $data;
+}, 99, 2);
+
+// Yoast
+add_filter('wpseo_schema_graph', function($data) { ... });
+
+// WooCommerce
+add_filter('woocommerce_structured_data_product', function($markup) { ... });
+```
